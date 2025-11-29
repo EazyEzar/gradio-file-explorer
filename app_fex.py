@@ -82,12 +82,19 @@ def build_file_list(path):
         print(f"Error reading path {path}: {e}")
     return items_list
 
-def create_zip_and_get_link(selected_paths_str, current_path, progress=gr.Progress()):
+def create_zip_and_get_link(df, current_path, progress=gr.Progress()):
     """
-    Creates a zip file from a comma-separated string of selected paths.
+    Creates a zip file from the selected checkboxes in the DataFrame.
     """
-    selected_paths = selected_paths_str.split(',') if selected_paths_str else []
-    
+    # --- NEW LOGIC: Extract paths directly from the DataFrame ---
+    selected_paths = []
+    if df is not None and not df.empty:
+        for index, row in df.iterrows():
+            # Check column 'Select' (case insensitive string or boolean check)
+            if str(row['Select']).lower() == 'true':
+                selected_paths.append(os.path.join(current_path, row['Name']))
+    # -----------------------------------------------------------
+
     if not selected_paths:
         gr.Warning("No files or folders selected for download.")
         return None
@@ -156,7 +163,7 @@ def upload_files(file_paths, current_path):
     return update_file_display(current_path) + (None,)
     
 # --- Gradio Interface ---
-with gr.Blocks(theme=gr.themes.Soft(), css=".gradio-container { max-width: 90% !important; }") as demo:
+with gr.Blocks() as demo:
     
     # Hidden state to store the list of selected file paths as a string
     selected_paths_state = gr.Textbox(value="", visible=False)
@@ -242,7 +249,7 @@ with gr.Blocks(theme=gr.themes.Soft(), css=".gradio-container { max-width: 90% !
         
         return selected_paths_str, display_str
 
-    def handle_row_select(evt: gr.SelectData, df_data: pd.DataFrame, current_path: str, current_display: str, current_selected: str):
+    def handle_row_select(evt: gr.SelectData, df_data: pd.DataFrame, current_path: str, current_display: str, current_selected: str, confirm_del: bool):
         """
         Handles clicking on a row to navigate into directories.
         """
@@ -258,16 +265,26 @@ with gr.Blocks(theme=gr.themes.Soft(), css=".gradio-container { max-width: 90% !
                 state.set_path(new_path)
                 return update_file_display(state.current_path)
 
-        # If not a directory click, do nothing. Return the current values.
-        return current_path, df_data, current_display, current_selected
+        # --- CRITICAL FIX ---
+        # If we clicked a Checkbox or a File (not a folder), we must NOT return the old data.
+        # Returning inputs here would overwrite the checkbox state that just changed.
+        # gr.skip() tells Gradio: "Ignore this event, don't update any outputs."
+        return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
 
-    def delete_selected_items(selected_paths_str, confirm_delete, current_path):
+    def delete_selected_items(df, confirm_delete, current_path):
         """Deletes the selected files and folders after confirmation."""
         if not confirm_delete:
             gr.Warning("Deletion not confirmed. Please check the confirmation box.")
             return update_file_display(current_path)
 
-        selected_paths = selected_paths_str.split(',') if selected_paths_str else []
+        # --- NEW LOGIC: Extract paths directly from the DataFrame ---
+        selected_paths = []
+        if df is not None and not df.empty:
+            for index, row in df.iterrows():
+                if str(row['Select']).lower() == 'true':
+                    selected_paths.append(os.path.join(current_path, row['Name']))
+        # -----------------------------------------------------------
+
         if not selected_paths:
             gr.Warning("No items selected to delete.")
             return update_file_display(current_path)
@@ -329,19 +346,21 @@ with gr.Blocks(theme=gr.themes.Soft(), css=".gradio-container { max-width: 90% !
     
     file_list_df.select(
         fn=handle_row_select,
-        inputs=[file_list_df, path_input, selected_display, selected_paths_state],
-        outputs=[path_input, file_list_df, selected_display, selected_paths_state]
+        # ADDED confirm_delete_checkbox to inputs
+        inputs=[file_list_df, path_input, selected_display, selected_paths_state, confirm_delete_checkbox],
+        # ADDED confirm_delete_checkbox to outputs
+        outputs=[path_input, file_list_df, selected_display, selected_paths_state, confirm_delete_checkbox]
     )
 
     download_button.click(
         fn=create_zip_and_get_link,
-        inputs=[selected_paths_state, path_input],
+        inputs=[file_list_df, path_input], 
         outputs=[download_link]
     )
     
     delete_button.click(
         fn=delete_selected_items,
-        inputs=[selected_paths_state, confirm_delete_checkbox, path_input],
+        inputs=[file_list_df, confirm_delete_checkbox, path_input],
         outputs=[path_input, file_list_df, selected_display, selected_paths_state, confirm_delete_checkbox]
     )
     
